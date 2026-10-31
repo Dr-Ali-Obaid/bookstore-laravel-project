@@ -18,9 +18,13 @@ class PurchaseController extends Controller
 {
     private $provider;
 
-    function __construct()
+    public function __construct()
     {
         Stripe::setApiKey(env('STRIPE_SECRET'));
+    }
+
+    private function initPayPal()
+    {
         $this->provider = new PayPalClient;
         $this->provider->setApiCredentials(config('paypal'));
         $token = $this->provider->getAccessToken();
@@ -34,6 +38,7 @@ class PurchaseController extends Controller
 
     public function createPayment(Request $request)
     {
+        $this->initPayPal();
 
         $data = json_decode($request->getContent(), true);
         $books = User::find($data['userId'])->booksInCart;
@@ -58,6 +63,8 @@ class PurchaseController extends Controller
 
     public function executePayment(Request $request)
     {
+        $this->initPayPal();
+
         $data = json_decode($request->getContent(), true);
         $result = $this->provider->capturePaymentOrder($data['orderId']);
         if ($result['status'] === 'COMPLETED') {
@@ -93,7 +100,6 @@ class PurchaseController extends Controller
         $user = $request->user();
         $paymentMethod = $request->input('payment_method');
 
-        // جلب الكتب من السلة
         $books = $user->booksInCart;
         $total = 0;
         foreach ($books as $book) {
@@ -105,28 +111,23 @@ class PurchaseController extends Controller
         }
 
         try {
-            // إنشاء العميل إذا لم يكن موجود
             $user->createOrGetStripeCustomer();
 
-            // تعيين طريقة الدفع الافتراضية
             $user->updateDefaultPaymentMethod($paymentMethod);
 
-            // إنشاء PaymentIntent والدفع مباشرة
             $paymentIntent = \Stripe\PaymentIntent::create([
-                'amount' => $total * 100, // بالمليم
+                'amount' => $total * 100,
                 'currency' => 'usd',
                 'customer' => $user->stripe_id,
                 'payment_method' => $paymentMethod,
                 'confirm' => true,
                 'automatic_payment_methods' => [
                     'enabled' => true,
-                    'allow_redirects' => 'never', // يمنع إعادة التوجيه
+                    'allow_redirects' => 'never',
                 ],
             ]);
 
-
             if ($paymentIntent->status === 'succeeded') {
-                // تحديث حالة الكتب إلى "تم الشراء"
                 foreach ($books as $book) {
                     $user->booksInCart()->updateExistingPivot($book->id, [
                         'bought' => true,
@@ -150,7 +151,8 @@ class PurchaseController extends Controller
         return view('books.myProduct', compact('myBooks'));
     }
 
-    public function allProducts(){
+    public function allProducts()
+    {
         $allBooks = Shopping::with(['user', 'book'])->where('bought', true)->get();
         return view('admin.books.allProducts', compact('allBooks'));
     }
